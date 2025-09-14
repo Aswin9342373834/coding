@@ -1,0 +1,78 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+
+# Set random seed for reproducibility
+np.random.seed(0)
+
+# 1) Create a synthetic SAR-like grayscale image
+h, w = 512, 512
+x = np.linspace(-1, 1, w)
+y = np.linspace(-1, 1, h)
+xx, yy = np.meshgrid(x, y)
+
+base = np.zeros_like(xx)
+centers = [(-0.5, -0.4), (0.2, 0.3), (0.6, -0.2), (0.0, 0.0), (-0.1, 0.6)]
+for cx, cy in centers:
+    amp = np.random.uniform(0.6, 1.2)
+    sigma = np.random.uniform(0.05, 0.18)
+    base += amp * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * sigma ** 2))
+
+speckle = np.random.rayleigh(scale=0.4, size=base.shape)
+image = base * (1 + 0.7 * speckle)
+image = image + 0.02 * np.random.randn(h, w)
+image = np.clip(image, a_min=0, a_max=None)
+img = (image - image.min()) / (image.max() - image.min())
+
+# 2) Edge / gradient channel
+dx = np.zeros_like(img)
+dy = np.zeros_like(img)
+dx[:, 1:-1] = (img[:, 2:] - img[:, :-2]) / 2.0
+dy[1:-1, :] = (img[2:, :] - img[:-2, :]) / 2.0
+grad = np.sqrt(dx * dx + dy * dy)
+grad = (grad - grad.min()) / (grad.max() - grad.min() + 1e-12)
+
+# 3) Local mean using integral image with extra zero row/col
+k = 31  # box window size (odd)
+half = k // 2
+padded = np.pad(img, ((half, half), (half, half)), mode='reflect')
+Hpad, Wpad = padded.shape
+
+II2 = np.zeros((Hpad + 1, Wpad + 1), dtype=float)
+II2[1:, 1:] = padded.cumsum(axis=0).cumsum(axis=1)
+
+A = II2[k : k + h, k : k + w]
+B = II2[0 : h, k : k + w]
+C = II2[k : k + h, 0 : w]
+D = II2[0 : h, 0 : w]
+sum_window = A - B - C + D
+local_mean = sum_window / (k * k)
+local_mean = (local_mean - local_mean.min()) / (local_mean.max() - local_mean.min() + 1e-12)
+
+# 4) Stack into RGB (R=intensity, G=edges, B=local mean)
+R = img
+G = grad
+B = local_mean
+rgb = np.dstack([R, G, B])
+rgb = np.clip(rgb, 0.0, 1.0)
+rgb = rgb ** 0.9  # optional gamma
+
+# 5) Save outputs
+color_uint8 = (rgb * 255).astype(np.uint8)
+gray_uint8 = (img * 255).astype(np.uint8)
+Image.fromarray(color_uint8).save('sar_colorized_demo.png')
+Image.fromarray(gray_uint8).save('sar_synthetic_grayscale.png')
+
+# 6) Display results
+plt.figure(figsize=(6,6))
+plt.title('Original SAR-like grayscale')
+plt.imshow(img, cmap='gray')
+plt.axis('off')
+
+plt.figure(figsize=(6,6))
+plt.title('Colorized (derived channels: intensity / edge / local-mean)')
+plt.imshow(rgb)
+plt.axis('off')
+plt.show()
+
+print("Saved files: sar_colorized_demo.png and sar_synthetic_grayscale.png")
